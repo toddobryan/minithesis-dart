@@ -1,16 +1,18 @@
-import 'package:minithesis_dart/minithesis_dart.dart';
+import 'package:minithesis_dart/minithesis.dart';
+import 'package:parameterized_test/parameterized_test.dart';
 import 'package:test/test.dart';
 
+Possibility listOfIntegers = Possibility("listOfIntegers", (tc) {
+  List<int> result = [];
+  while (tc.weighted(0.9).toBool()) {
+    result.add(tc.choice(10000));
+  }
+  return result;
+});
+
 void main() {
-  group('A group of tests', () {
-    final awesome = Awesome();
-
-    setUp(() {
-      // Additional setup goes here.
-    });
-
-    test('First Test', () {
-      expect(awesome.isAwesome, isTrue);
-    });
-  });
+  parameterizedTest(
+    'finds small list',
+    List<int>.generate(10, (i) => i),
+    runTest()
 }

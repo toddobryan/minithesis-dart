@@ -1,14 +1,58 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 
 import 'src/better_random.dart';
 
-mixin Database {
-  void operator []=(String key, ByteData value);
+// Dart uses 64 bit ints on native, but only 32 bits are reliable on web
+final int maxBitLength = 63;
 
-  ByteData? operator [](String key);
+final listEquals = const ListEquality().equals;
+
+mixin Database {
+  void operator []=(String key, Uint8List value);
+
+  Uint8List? operator [](String key);
 
   void remove(String key);
+}
+
+void Function(void Function(String, TestCase)) runTest([
+  int maxExamples = 100,
+  BetterRandom? random,
+  Database? database,
+  bool quiet = false,
+]) {
+  void accept(String name, void Function(TestCase) test) {
+    void markFailuresInteresting(TestCase testCase) {
+      try {
+        test(testCase);
+      } catch (e) {
+        if (testCase.status != null) {
+          rethrow;
+        }
+        testCase.markStatus(Status.interesting);
+      }
+    }
+
+    var state = TestingState(
+      random ?? BetterRandom.usingClock(),
+      markFailuresInteresting,
+      maxExamples,
+    );
+
+    Database db = database ?? DirectoryDb.fromPath(".minithesis-cache");
+
+    var previousFailure = db[name];
+
+    if (previousFailure != null) {
+      choices
+    }
+  }
 }
 
 class TestCase {
@@ -54,7 +98,7 @@ class TestCase {
   }
 
   int forcedChoice(int n) {
-    if (n < 0 || n.bitLength >= 63) {
+    if (n < 0 || n.bitLength >= maxBitLength) {
       throw ArgumentError('Invalid choice $n');
     } else if (status != null) {
       throw Frozen();
@@ -104,7 +148,7 @@ class TestCase {
 
   int _makeChoice(int n, int Function() rndMethod) {
     late int result;
-    if (n < 0 || n.bitLength >= 63) {
+    if (n < 0 || n.bitLength >= maxBitLength) {
       throw ArgumentError('Invalid choice $n');
     } else if (status != null) {
       throw Frozen();
@@ -141,16 +185,19 @@ extension BoolToInt on bool {
 }
 
 class Possibility<T> {
-  Possibility(this.produce, this.name);
+  Possibility(this.name, this.produce);
 
-  T Function(TestCase) produce;
   String name;
+  T Function(TestCase) produce;
 
   @override
   String toString() => name;
 
   Possibility<S> map<S>(S Function(T) f, String name) {
-    return Possibility((p) => f(p.any(this)), '${this.name}.map($name)');
+    return Possibility(
+      '${this.name}.map($name, (p) => f(p.any(this)))',
+      (tc) => f(tc.any(this)),
+    );
   }
 
   Possibility<S> bind<S>(Possibility<S> Function(T) f, String name) {
@@ -158,7 +205,7 @@ class Possibility<T> {
       return testCase.any(f(testCase.any(this)));
     }
 
-    return Possibility(produce, '${this.name}.bind($name)');
+    return Possibility('${this.name}.bind($name, produce)', produce);
   }
 
   Possibility<T> satisfying(bool Function(T) f, String name) {
@@ -172,12 +219,12 @@ class Possibility<T> {
       testCase.reject();
     }
 
-    return Possibility<T>(produce, '${this.name}.select($name)');
+    return Possibility<T>('${this.name}.select($name)', produce);
   }
 }
 
 Possibility<int> integers(int m, int n) {
-  return Possibility((tc) => m + tc.choice(n - m), 'integers($m, $n)');
+  return Possibility('integers($m, $n)', (tc) => m + tc.choice(n - m));
 }
 
 Possibility<List<U>> lists<U>(
@@ -201,15 +248,15 @@ Possibility<List<U>> lists<U>(
     return result;
   }
 
-  return Possibility<List<U>>(produce, 'lists(${elements.name})');
+  return Possibility<List<U>>('lists(${elements.name})', produce);
 }
 
 Possibility<U> just<U>(U value) {
-  return Possibility<U>((tc) => value, 'just($value)');
+  return Possibility<U>('just($value)', (tc) => value);
 }
 
 Possibility<Never> nothing() {
-  return Possibility((tc) => tc.reject(), 'nothing()');
+  return Possibility('nothing()', (tc) => tc.reject());
 }
 
 Possibility<T> mixOf<T>(List<Possibility<T>> possibilities) {
@@ -217,15 +264,15 @@ Possibility<T> mixOf<T>(List<Possibility<T>> possibilities) {
     return nothing();
   }
   return Possibility(
-    (tc) => tc.any(possibilities[tc.choice(possibilities.length - 1)]),
     'mixOf(${possibilities.map((p) => p.name).join(', ')})',
+    (tc) => tc.any(possibilities[tc.choice(possibilities.length - 1)]),
   );
 }
 
 Possibility<(T, U)> tuple2<T, U>(Possibility<T> t, Possibility<U> u) {
   return Possibility(
-    (tc) => (tc.any(t), tc.any(u)),
     'tuples(${t.name}, ${u.name})',
+    (tc) => (tc.any(t), tc.any(u)),
   );
 }
 
@@ -235,8 +282,8 @@ Possibility<(T, U, V)> tuple3<T, U, V>(
   Possibility<V> v,
 ) {
   return Possibility(
-    (tc) => (tc.any(t), tc.any(u), tc.any(v)),
     'tuples(${t.name}, ${u.name}, ${v.name})',
+    (tc) => (tc.any(t), tc.any(u), tc.any(v)),
   );
 }
 
@@ -247,8 +294,8 @@ Possibility<(T1, T2, T3, T4)> tuple4<T1, T2, T3, T4>(
   Possibility<T4> t4,
 ) {
   return Possibility(
-    (tc) => (tc.any(t1), tc.any(t2), tc.any(t3), tc.any(t4)),
     'tuples(${t1.name}, ${t2.name}, ${t3.name}, ${t4.name})',
+    (tc) => (tc.any(t1), tc.any(t2), tc.any(t3), tc.any(t4)),
   );
 }
 
@@ -260,8 +307,8 @@ Possibility<(T1, T2, T3, T4, T5)> tuple5<T1, T2, T3, T4, T5>(
   Possibility<T5> t5,
 ) {
   return Possibility(
-    (tc) => (tc.any(t1), tc.any(t2), tc.any(t3), tc.any(t4), tc.any(t5)),
     'tuples(${t1.name}, ${t2.name}, ${t3.name}, ${t4.name}, ${t5.name})',
+    (tc) => (tc.any(t1), tc.any(t2), tc.any(t3), tc.any(t4), tc.any(t5)),
   );
 }
 
@@ -275,7 +322,7 @@ class CachedTestFunction {
   void Function(TestCase) testFunction;
   Map<int, dynamic> tree = <int, dynamic>{};
 
-  Status call(choices = List<int>) {
+  Status call(List<int> choices) {
     dynamic node = tree;
     for (int c in choices) {
       node = node[c];
@@ -297,7 +344,8 @@ class CachedTestFunction {
 
     node = tree;
     for (final (i, c) in testCase.choices.indexed) {
-      if (i + 1 < testCase.choices.length || testCase.status == Status.overrun) {
+      if (i + 1 < testCase.choices.length ||
+          testCase.status == Status.overrun) {
         if (!(node as Map<int, dynamic>).containsKey(c)) {
           node[c] = <int, dynamic>{};
         }
@@ -332,8 +380,8 @@ class TestingState {
     testCase.status ??= Status.valid;
     calls++;
 
-    if (testCase.choices.length == 0 
-        && testCase.status!.val >= Status.invalid.val) {
+    if (testCase.choices.isEmpty &&
+        testCase.status!.val >= Status.invalid.val) {
       testIsTrivial = true;
     }
 
@@ -341,7 +389,10 @@ class TestingState {
       validTestCases++;
 
       if (testCase.targetingScore != null) {
-        (int, List<int>) relevantInfo = (testCase.targetingScore!, testCase.choices);
+        (int, List<int>) relevantInfo = (
+          testCase.targetingScore!,
+          testCase.choices,
+        );
         if (bestScoring == null) {
           bestScoring = relevantInfo;
         } else {
@@ -354,15 +405,214 @@ class TestingState {
       }
     }
 
-    if (testCase.status == Status.interesting 
-        && (result == null || sortKey(testCase.choices) < sortKey(result!))) {
+    if (testCase.status == Status.interesting &&
+        (result == null || sortKey(testCase.choices) < sortKey(result!))) {
       result = testCase.choices;
     }
   }
 
   void target() {
-    
+    if (result != null || bestScoring == null) {
+      return;
+    }
+
+    bool adjust(int i, int step) {
+      assert(bestScoring != null);
+      var (int score, List<int> choices) = bestScoring!;
+      if (choices[i] + step < 0 || choices[i].bitLength >= maxBitLength) {
+        return false;
+      }
+
+      List<int> attempt = [...choices];
+      attempt[i] += step;
+      TestCase testCase = TestCase(attempt, random, bufferSize);
+      callTestFunction(testCase);
+      assert(testCase.status != null);
+      return (testCase.status!.val >= Status.valid.val &&
+          testCase.targetingScore != null &&
+          testCase.targetingScore! > score);
+    }
+
+    while (shouldKeepGenerating()) {
+      int i = random.nextIntInRange(0, bestScoring!.$2.length);
+      int sign = 0;
+      for (int k in [1, -1]) {
+        if (!shouldKeepGenerating()) {
+          return;
+        }
+        if (adjust(i, k)) {
+          sign = k;
+          break;
+        }
+      }
+      if (sign == 0) {
+        continue;
+      }
+
+      int k = 1;
+      while (shouldKeepGenerating() && adjust(i, sign * k)) {
+        k *= 2;
+      }
+
+      while (k > 0) {
+        while (shouldKeepGenerating() && adjust(i, sign * k)) {
+          // do nothing
+        }
+        k ~/= 2;
+        {}
+      }
+    }
   }
+
+  void run() {
+    generate();
+    target();
+    shrink();
+  }
+
+  bool shouldKeepGenerating() {
+    return (!testIsTrivial &&
+        result == null &&
+        validTestCases < maxExamples &&
+        calls < maxExamples * 10);
+  }
+
+  void generate() {
+    while (shouldKeepGenerating() && bestScoring == null ||
+        validTestCases <= maxExamples ~/ 2) {
+      callTestFunction(TestCase([], random, bufferSize));
+    }
+  }
+
+  void shrink() {
+    if (result == null || result!.isEmpty) {
+      return;
+    }
+
+    CachedTestFunction cached = CachedTestFunction(testFunction);
+
+    bool consider(List<int> choices) {
+      if (listEquals(choices, result)) {
+        return true;
+      } else {
+        return cached(choices) == Status.interesting;
+      }
+    }
+
+    assert(consider(result!));
+
+    List<int>? prev;
+
+    while (!listEquals(prev, result)) {
+      prev = [...result!];
+
+      int k = 8;
+      while (k > 0) {
+        int i = result!.length - k - 1;
+        while (i >= 0) {
+          if (i >= result!.length) {
+            i -= 1;
+            continue;
+          }
+          List<int> attempt = result!.sublist(0, i) + result!.sublist(i + k);
+          assert(attempt.length < result!.length);
+          if (!consider(attempt)) {
+            if (i > 0 && attempt[i - 1] > 0) {
+              attempt[i - 1]--;
+              if (consider(attempt)) {
+                i++;
+              }
+            }
+            i--;
+          }
+        }
+        k--;
+      }
+
+      bool replace(Map<int, int> values) {
+        assert(result != null);
+        List<int> attempt = [...result!];
+        for (var me in values.entries) {
+          if (me.key >= attempt.length) {
+            return false;
+          }
+          attempt[me.key] = me.value;
+        }
+        return consider(attempt);
+      }
+
+      k = 8;
+      while (k > 1) {
+        int i = result!.length - k;
+        while (i >= 0) {
+          Map<int, int> kZerosStartingAtI = <int, int>{
+            for (int j in List<int>.generate(k, (x) => i + x)) j: 0,
+          };
+          if (replace(kZerosStartingAtI)) {
+            i -= k;
+          } else {
+            i--;
+          }
+        }
+        k--;
+      }
+
+      int i = result!.length - 1;
+      while (i >= 0) {
+        binSearchDown(0, result![i], (v) => replace(<int, int>{i: v}));
+        i--;
+      }
+
+      k = 8;
+      while (k > 1) {
+        List<int> range = [for (int x = result!.length - k - 1; x > -1; x--) x];
+        for (i in range) {
+          List<int> middle = [...result!.sublist(i, i + k)];
+          middle.sort();
+          consider(result!.sublist(0, i) + middle + result!.sublist(i + k));
+        }
+        k--;
+      }
+
+      for (k in [2, 1]) {
+        List<int> range = [for (int x = result!.length - k - 1; x > -1; x--) x];
+        for (i in range) {
+          int j = i + k;
+
+          if (j < result!.length) {
+            if (result![i] == result![j]) {
+              replace(<int, int>{j: result![i], i: result![j]});
+            }
+            if (j < result!.length && result![i] > 0) {
+              int previousI = result![i];
+              int previousJ = result![j];
+              binSearchDown(
+                0,
+                previousI,
+                (v) =>
+                    replace(<int, int>{i: v, j: (previousJ + (previousI - v))}),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+int binSearchDown(int lo, int hi, bool Function(int) f) {
+  if (f(lo)) {
+    return lo;
+  }
+  while (lo + 1 < hi) {
+    int mid = lo + (hi - lo) ~/ 2;
+    if (f(mid)) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return hi;
 }
 
 extension CompareIntList on (int, List<int>) {
@@ -388,20 +638,62 @@ extension CompareIntList on (int, List<int>) {
   }
 }
 
+class DirectoryDb implements Database {
+  DirectoryDb(this.directory);
+
+  factory DirectoryDb.fromPath(String path) {
+    Directory dir = Directory(path);
+    if (!dir.existsSync()) {
+      dir.createSync();
+    }
+    return DirectoryDb(dir);
+  }
+
+  Directory directory;
+
+  File _toFile(String key) {
+    String filename = sha1
+        .convert(utf8.encode(key))
+        .toString()
+        .substring(0, 10);
+    return File(p.join(directory.path, filename));
+  }
+
+  @override
+  Uint8List? operator [](String key) {
+    var f = _toFile(key);
+    if (!f.existsSync()) {
+      return null;
+    }
+    return f.readAsBytesSync();
+  }
+
+  @override
+  void operator []=(String key, Uint8List value) {
+    var f = _toFile(key);
+    f.writeAsBytesSync(value);
+  }
+
+  @override
+  void remove(String key) {
+    var f = _toFile(key);
+    f.deleteSync();
+  }
+}
+
 class Frozen extends Error {}
 
 class StopTest extends Error {}
 
 class Unsatisfiable extends Error {}
 
-enum Status { 
-  overrun(0), 
-  invalid(1), 
-  valid(2), 
+enum Status {
+  overrun(0),
+  invalid(1),
+  valid(2),
   interesting(3);
 
   const Status(this.val);
 
   final int val;
 }
-
