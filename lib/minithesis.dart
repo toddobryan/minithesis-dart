@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'src/better_random.dart';
+
 mixin Database {
   void operator []=(String key, ByteData value);
 
@@ -22,7 +24,7 @@ class TestCase {
   }
 
   Iterable<int> prefix;
-  Random? random;
+  BetterRandom? random;
   num maxSize = double.infinity;
   bool printResults = false;
   List<int> choices = List<int>.empty();
@@ -31,7 +33,7 @@ class TestCase {
   int? targetingScore;
 
   int choice(int n) {
-    int result = _makeChoice(n, () => random!.nextInt(n + 1));
+    int result = _makeChoice(n, () => random!.nextNonNegIntBelow(n + 1));
     if (_shouldPrint()) {
       print('choice($n): $result');
     }
@@ -271,6 +273,119 @@ class CachedTestFunction {
   CachedTestFunction(this.testFunction);
 
   void Function(TestCase) testFunction;
+  Map<int, dynamic> tree = <int, dynamic>{};
+
+  Status call(choices = List<int>) {
+    dynamic node = tree;
+    for (int c in choices) {
+      node = node[c];
+      if (node == null) {
+        break;
+      }
+      if (node is Status) {
+        assert(node != Status.overrun);
+        return node;
+      }
+    }
+    if (node == null) {
+      return Status.overrun;
+    }
+
+    TestCase testCase = TestCase.forChoices(choices);
+    testFunction(testCase);
+    assert(testCase.status != null);
+
+    node = tree;
+    for (final (i, c) in testCase.choices.indexed) {
+      if (i + 1 < testCase.choices.length || testCase.status == Status.overrun) {
+        if (!(node as Map<int, dynamic>).containsKey(c)) {
+          node[c] = <int, dynamic>{};
+        }
+        node = node[c];
+      } else {
+        node[c] = testCase.status;
+      }
+    }
+    return testCase.status!;
+  }
+}
+
+class TestingState {
+  TestingState(this.random, this.testFunction, this.maxExamples);
+
+  BetterRandom random;
+  int maxExamples;
+  void Function(TestCase) testFunction;
+  int validTestCases = 0;
+  int calls = 0;
+  List<int>? result;
+  (int, List<int>)? bestScoring;
+  bool testIsTrivial = false;
+
+  void callTestFunction(TestCase testCase) {
+    try {
+      testFunction(testCase);
+    } on StopTest {
+      // do nothing
+    }
+
+    testCase.status ??= Status.valid;
+    calls++;
+
+    if (testCase.choices.length == 0 
+        && testCase.status!.val >= Status.invalid.val) {
+      testIsTrivial = true;
+    }
+
+    if (testCase.status!.val >= Status.valid.val) {
+      validTestCases++;
+
+      if (testCase.targetingScore != null) {
+        (int, List<int>) relevantInfo = (testCase.targetingScore!, testCase.choices);
+        if (bestScoring == null) {
+          bestScoring = relevantInfo;
+        } else {
+          late int best;
+          (best, _) = bestScoring!;
+          if (testCase.targetingScore! > best) {
+            bestScoring = relevantInfo;
+          }
+        }
+      }
+    }
+
+    if (testCase.status == Status.interesting 
+        && (result == null || sortKey(testCase.choices) < sortKey(result!))) {
+      result = testCase.choices;
+    }
+  }
+
+  void target() {
+    
+  }
+}
+
+extension CompareIntList on (int, List<int>) {
+  bool operator <((int, List<int>) other) {
+    if ($1 < other.$1) {
+      return true;
+    } else if ($1 > other.$1) {
+      return false;
+    } else {
+      for (int i = 0; i < max($2.length, other.$2.length); i++) {
+        if (i > $2.length) {
+          return true;
+        } else if (i > other.$2.length) {
+          return false;
+        } else if ($2[i] < other.$2[i]) {
+          return true;
+        } else if ($2[i] > other.$2[i]) {
+          return false;
+        }
+      }
+      return false;
+    }
+  }
 }
 
 class Frozen extends Error {}
@@ -279,4 +394,14 @@ class StopTest extends Error {}
 
 class Unsatisfiable extends Error {}
 
-enum Status { overrun, invalid, valid, interesting }
+enum Status { 
+  overrun(0), 
+  invalid(1), 
+  valid(2), 
+  interesting(3);
+
+  const Status(this.val);
+
+  final int val;
+}
+
