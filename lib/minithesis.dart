@@ -4,9 +4,19 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
+import 'package:fixnum/fixnum.dart';
 import 'package:path/path.dart' as p;
 
 import 'src/better_random.dart';
+
+class NamedFunction<F extends Function> {
+  NamedFunction(this.name, this.f);
+
+  final String name;
+  final F f;
+
+  F get call => f;
+}
 
 // Dart uses 64 bit ints on native, but only 32 bits are reliable on web
 final int maxBitLength = 63;
@@ -27,10 +37,10 @@ void Function(void Function(String, TestCase)) runTest([
   Database? database,
   bool quiet = false,
 ]) {
-  void accept(String name, void Function(TestCase) test) {
+  void accept(NamedFunction<void Function(TestCase)> test) {
     void markFailuresInteresting(TestCase testCase) {
       try {
-        test(testCase);
+        test.call(testCase);
       } catch (e) {
         if (testCase.status != null) {
           rethrow;
@@ -47,10 +57,16 @@ void Function(void Function(String, TestCase)) runTest([
 
     Database db = database ?? DirectoryDb.fromPath(".minithesis-cache");
 
-    var previousFailure = db[name];
+    var previousFailure = db[test.name];
 
     if (previousFailure != null) {
-      choices
+      int l = previousFailure.length;
+      List<int> theIs = List<int>.generate(l ~/ 8, (x) => x * 8);
+      List<Int64> choices = [
+        for (int i in theIs)
+          Int64.fromBytes(previousFailure.sublist(i, min(l, i + 8))),
+      ];
+      state.testFunction(TestCase.forChoices(choices));
     }
   }
 }
@@ -63,15 +79,18 @@ class TestCase {
     this.printResults = false,
   ]);
 
-  factory TestCase.forChoices(List<int> choices, [bool printResults = false]) {
+  factory TestCase.forChoices(
+    List<Int64> choices, [
+    bool printResults = false,
+  ]) {
     return TestCase(choices, null, choices.length, printResults);
   }
 
-  Iterable<int> prefix;
+  Iterable<Int64> prefix;
   BetterRandom? random;
   num maxSize = double.infinity;
   bool printResults = false;
-  List<int> choices = List<int>.empty();
+  List<Int64> choices = List<Int64>.empty();
   Status? status;
   int depth = 0;
   int? targetingScore;
@@ -146,8 +165,8 @@ class TestCase {
 
   bool _shouldPrint() => printResults && depth == 0;
 
-  int _makeChoice(int n, int Function() rndMethod) {
-    late int result;
+  int _makeChoice(int n, Int64 Function() rndMethod) {
+    late Int64 result;
     if (n < 0 || n.bitLength >= maxBitLength) {
       throw ArgumentError('Invalid choice $n');
     } else if (status != null) {
