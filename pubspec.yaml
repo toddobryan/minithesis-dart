@@ -19,3 +19,4 @@ dependencies:
   collection: ^1.19.1
   path: ^1.9.1
   crypto: ^3.0.6
+  stack: ^0.2.2

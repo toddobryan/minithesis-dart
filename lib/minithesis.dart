@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
-import 'package:fixnum/fixnum.dart';
 import 'package:path/path.dart' as p;
 
 import 'src/better_random.dart';
@@ -61,11 +60,9 @@ void Function(void Function(String, TestCase)) runTest([
 
     if (previousFailure != null) {
       int l = previousFailure.length;
-      List<int> theIs = List<int>.generate(l ~/ 8, (x) => x * 8);
-      List<Int64> choices = [
-        for (int i in theIs)
-          Int64.fromBytes(previousFailure.sublist(i, min(l, i + 8))),
-      ];
+      List<int> theIs = List<int>.generate(l ~/ 4, (x) => x * 4);
+      ByteData bytes = previousFailure.buffer.asByteData();
+      List<int> choices = [for (int i in theIs) bytes.getInt32(i)];
       state.testFunction(TestCase.forChoices(choices));
     }
   }
@@ -79,18 +76,15 @@ class TestCase {
     this.printResults = false,
   ]);
 
-  factory TestCase.forChoices(
-    List<Int64> choices, [
-    bool printResults = false,
-  ]) {
+  factory TestCase.forChoices(List<int> choices, [bool printResults = false]) {
     return TestCase(choices, null, choices.length, printResults);
   }
 
-  Iterable<Int64> prefix;
+  Iterable<int> prefix;
   BetterRandom? random;
   num maxSize = double.infinity;
   bool printResults = false;
-  List<Int64> choices = List<Int64>.empty();
+  List<int> choices = List<int>.empty();
   Status? status;
   int depth = 0;
   int? targetingScore;
@@ -165,8 +159,8 @@ class TestCase {
 
   bool _shouldPrint() => printResults && depth == 0;
 
-  int _makeChoice(int n, Int64 Function() rndMethod) {
-    late Int64 result;
+  int _makeChoice(int n, int Function() rndMethod) {
+    late int result;
     if (n < 0 || n.bitLength >= maxBitLength) {
       throw ArgumentError('Invalid choice $n');
     } else if (status != null) {
