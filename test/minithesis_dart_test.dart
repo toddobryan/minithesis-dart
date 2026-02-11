@@ -1,18 +1,21 @@
-import 'package:minithesis_dart/minithesis.dart';
-import 'package:parameterized_test/parameterized_test.dart';
+import 'dart:math';
+
+import 'package:minithesis_dart/src/minithesis.dart';
+import 'package:checks/checks.dart';
 import 'package:test/test.dart';
 
-Possibility listOfIntegers = Possibility("listOfIntegers", (tc) {
-  List<int> result = [];
-  while (tc.weighted(0.9).toBool()) {
-    result.add(tc.choice(10000));
-  }
-  return result;
-});
-
 void main() {
-  parameterizedTest(
-    'finds small list',
-    List<int>.generate(10, (i) => i),
-    runTest()
+  test('trivial', () {
+    runTest()!(TestFunction('trivial', (tc) {}));
+  });
+
+  test('simple integer test passes', () {
+    runTest()!(TestFunction('simple integer test passes', (tc) {
+      int x = tc.choice(10);
+      int y = tc.choice(10);
+      check(min(x, y))
+          ..isLessOrEqual(x)
+          ..equals(y);
+    }));
+  });
 }

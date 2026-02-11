@@ -6,15 +6,13 @@ import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
-import 'src/better_random.dart';
+class TestFunction {
+  TestFunction(this.name, this.f);
 
-class NamedFunction<F extends Function> {
-  NamedFunction(this.name, this.f);
+  String name;
+  void Function(TestCase) f;
 
-  final String name;
-  final F f;
-
-  F get call => f;
+  void call(TestCase tc) => f(tc);
 }
 
 // Dart uses 64 bit ints on native, but only 32 bits are reliable on web
@@ -30,26 +28,26 @@ mixin Database {
   void remove(String key);
 }
 
-void Function(void Function(String, TestCase)) runTest([
+void Function(TestFunction)? runTest([
   int maxExamples = 100,
-  BetterRandom? random,
+  Random? random,
   Database? database,
   bool quiet = false,
 ]) {
-  void accept(NamedFunction<void Function(TestCase)> test) {
-    void markFailuresInteresting(TestCase testCase) {
+  void accept(TestFunction test) {
+    TestFunction markFailuresInteresting = TestFunction(test.name, (tc) {
       try {
-        test.call(testCase);
+        test.call(tc);
       } catch (e) {
-        if (testCase.status != null) {
+        if (tc.status != null) {
           rethrow;
         }
-        testCase.markStatus(Status.interesting);
+        tc.markStatus(Status.interesting);
       }
-    }
+    });
 
     var state = TestingState(
-      random ?? BetterRandom.usingClock(),
+      random ?? Random(DateTime.now().microsecondsSinceEpoch),
       markFailuresInteresting,
       maxExamples,
     );
@@ -66,6 +64,7 @@ void Function(void Function(String, TestCase)) runTest([
       state.testFunction(TestCase.forChoices(choices));
     }
   }
+  return accept;
 }
 
 class TestCase {
@@ -73,24 +72,24 @@ class TestCase {
     this.prefix,
     this.random, [
     this.maxSize = double.infinity,
-    this.printResults = false,
+    this.printResults = true,
   ]);
 
-  factory TestCase.forChoices(List<int> choices, [bool printResults = false]) {
+  factory TestCase.forChoices(List<int> choices, [bool printResults = true]) {
     return TestCase(choices, null, choices.length, printResults);
   }
 
   Iterable<int> prefix;
-  BetterRandom? random;
+  Random? random;
   num maxSize = double.infinity;
-  bool printResults = false;
+  bool printResults = true;
   List<int> choices = List<int>.empty();
   Status? status;
   int depth = 0;
   int? targetingScore;
 
   int choice(int n) {
-    int result = _makeChoice(n, () => random!.nextNonNegIntBelow(n + 1));
+    int result = _makeChoice(n, () => random!.nextInt(n + 1));
     if (_shouldPrint()) {
       print('choice($n): $result');
     }
@@ -374,9 +373,9 @@ class CachedTestFunction {
 class TestingState {
   TestingState(this.random, this.testFunction, this.maxExamples);
 
-  BetterRandom random;
+  Random random;
   int maxExamples;
-  void Function(TestCase) testFunction;
+  TestFunction testFunction;
   int validTestCases = 0;
   int calls = 0;
   List<int>? result;
@@ -447,7 +446,7 @@ class TestingState {
     }
 
     while (shouldKeepGenerating()) {
-      int i = random.nextIntInRange(0, bestScoring!.$2.length);
+      int i = random.nextInt(bestScoring!.$2.length);
       int sign = 0;
       for (int k in [1, -1]) {
         if (!shouldKeepGenerating()) {
